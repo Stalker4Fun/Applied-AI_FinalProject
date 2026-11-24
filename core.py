@@ -22,6 +22,14 @@ HARMFUL_FOOD_PATTERNS = (
     r"\bhow\s+to\s+(?:poison|contaminat|spoil)\b",
 )
 
+# A scope guard declines clear non-food-rescue requests locally. It makes the
+# app's boundary predictable and avoids needless model calls during the demo.
+OUT_OF_SCOPE_PATTERNS = (
+    r"\b(?:what(?:'s| is) the weather|weather (?:in|for)|weather forecast|forecast for)\b",
+    r"\b(?:sports? scores?|who won (?:the )?(?:game|match)|stock price|crypto price)\b",
+    r"\b(?:tell me a joke|write (?:me )?(?:a )?poem|write code|debug (?:my )?code)\b",
+)
+
 
 @dataclass(frozen=True)
 class GuardResult:
@@ -39,12 +47,14 @@ class Partner:
 
 
 def inspect_user_input(text: str) -> GuardResult:
-    """Reject injection and harmful-food requests before any LLM API call."""
+    """Reject unsafe, malicious, and clearly out-of-scope input before an API call."""
     normalized = " ".join(text.lower().split())
     if any(re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in HARMFUL_FOOD_PATTERNS):
         return GuardResult(False, "I can’t help with spoiling, poisoning, or contaminating food. I can help you keep donations safe and usable.")
     if any(re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in INJECTION_PATTERNS):
         return GuardResult(False, "I can only assist with safe surplus-food donation and rescue logistics. Please share the food type, quantity, and when it was prepared or expires.")
+    if any(re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in OUT_OF_SCOPE_PATTERNS):
+        return GuardResult(False, "EcoBite is focused on surplus-food donation, safe packaging, and recipient matching. How can I help with a food donation today?")
     return GuardResult(True)
 
 
