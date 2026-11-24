@@ -1,0 +1,6 @@
+name,recipient_type,accepts,priority,note
+Community Meal Hub,night shelter,prepared_hot_meal,1,Call first to confirm immediate hot-meal capacity.
+Neighborhood Food Pantry,food pantry,shelf_stable,1,Best for sealed dry and canned goods.
+Cold Chain Community Fridge,community fridge,refrigerated_perishable,1,Confirm refrigerator space and collection hours.
+Freezer Share Network,mutual-aid freezer,frozen,1,Verify frozen-food intake before transport.
+Family Support Kitchen,community kitchen,prepared_hot_meal,2,Accepts labeled prepared meals when capacity allows.
