@@ -1,5 +1,8 @@
 import unittest
+from unittest.mock import Mock
 
+from openai import RateLimitError
+from app import friendly_api_error
 from core import classify_food, inspect_user_input, load_partners, parse_inventory_csv, summarize_inventory
 
 
@@ -31,6 +34,10 @@ class CoreTests(unittest.TestCase):
             {"name": "Test Pantry", "recipient_type": "pantry", "accepts": "shelf_stable", "priority": 1, "note": "Call first."}
         ])
         self.assertEqual(partners[0].priority, "1")
+
+    def test_explains_free_model_limit_without_exposing_error_details(self):
+        error = RateLimitError("no credits", response=Mock(status_code=429, headers={}), body=None)
+        self.assertIn("free-model limit", friendly_api_error(error))
 
 
 if __name__ == "__main__":

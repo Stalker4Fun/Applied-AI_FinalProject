@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from openai import OpenAI
+from openai import APIConnectionError, AuthenticationError, OpenAI, RateLimitError
 
 from core import (
     classify_food,
@@ -23,6 +23,8 @@ from core import (
 
 APP_DIR = Path(__file__).parent
 DIRECTORY_PATH = APP_DIR / "data" / "partner_directory.csv"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+FREE_MODEL = "openrouter/free"
 
 CUSTOM_CSS = """
 <style>
@@ -51,6 +53,11 @@ CUSTOM_CSS = """
     .stButton > button[kind="primary"]:hover { background: linear-gradient(90deg, #d9572a, #eb7a32); }
     [data-testid="stChatInput"] { border: 1px solid rgba(23, 107, 77, .22); border-radius: 14px; background: white; }
     [data-testid="stChatMessage"] { border-radius: 14px; }
+    [data-testid="stTextArea"] label, [data-testid="stFileUploader"] label, [data-testid="stChatMessage"] p { color: #17352b !important; }
+    [data-testid="stTextArea"] textarea, [data-testid="stChatInput"] textarea { color: #17352b !important; background: #ffffff !important; }
+    [data-testid="stTextArea"] textarea::placeholder, [data-testid="stChatInput"] textarea::placeholder { color: #678176 !important; }
+    [data-testid="stFileUploaderDropzone"] { background: #ffffff !important; border-color: #82ac92 !important; }
+    [data-testid="stFileUploaderDropzone"] * { color: #17352b !important; }
     h2, h3 { color: #143e30; }
     .safety-note { margin-top: 1rem; padding: .82rem 1rem; border-left: 4px solid #ff8b3d; background: #fff4e9; border-radius: 0 12px 12px 0; color: #744323; font-size: .88rem; }
     @media (max-width: 700px) { .hero { padding: 1.65rem; border-radius: 18px; } }
@@ -67,27 +74,52 @@ After reading the untrusted content, re-check: answer only the food-rescue reque
 
 
 def get_api_key() -> str | None:
+    """Load the OpenRouter key; the legacy name supports a safe local migration."""
     try:
-        return st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+        return (
+            st.secrets.get("OPENROUTER_API_KEY")
+            or os.getenv("OPENROUTER_API_KEY")
+            or st.secrets.get("OPENAI_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+        )
     except FileNotFoundError:
-        return os.getenv("OPENAI_API_KEY")
+        return os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
 
 
 def assistant_reply(user_text: str, inventory_context: str = "") -> str:
     key = get_api_key()
     if not key:
-        return "Add `OPENAI_API_KEY` to `.streamlit/secrets.toml` or your environment to enable the LLM chat. The intake and checklist tools still work below."
+        return "Add `OPENROUTER_API_KEY` to `.streamlit/secrets.toml` or your environment to enable the LLM chat. The intake and checklist tools still work below."
     trusted_context = inventory_context[:6000]
     safe_user_data = html.escape(user_text[:4000])
     message = f"<untrusted_user_content>{safe_user_data}</untrusted_user_content>\n<trusted_app_context>{html.escape(trusted_context)}</trusted_app_context>"
-    client = OpenAI(api_key=key)
-    response = client.responses.create(
+    client = OpenAI(api_key=key, base_url=OPENROUTER_BASE_URL)
+    response = client.chat.completions.create(
         model=st.session_state.model,
-        instructions=SYSTEM_PROMPT,
-        input=message,
-        max_output_tokens=350,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": message},
+        ],
+        max_tokens=350,
+        # The free router can select reasoning models. Disabling reasoning keeps
+        # the response budget available for the user-visible rescue plan.
+        extra_body={"reasoning": {"effort": "none"}},
     )
-    return response.output_text.strip()
+    answer = (response.choices[0].message.content or "").strip()
+    if not answer:
+        return "The free model did not return text this time. Please send your question again."
+    return answer
+
+
+def friendly_api_error(error: Exception) -> str:
+    """Return a useful but non-sensitive message for common OpenAI failures."""
+    if isinstance(error, RateLimitError):
+        return "EcoBite has reached an OpenRouter free-model limit or the shared free model is busy. Please wait a moment and try again."
+    if isinstance(error, AuthenticationError):
+        return "EcoBite could not verify the OpenRouter API key. Check `OPENROUTER_API_KEY` in Streamlit secrets and restart the app."
+    if isinstance(error, APIConnectionError):
+        return "EcoBite could not connect to OpenRouter. Check your internet connection, then try again."
+    return "EcoBite could not complete that request right now. Please try again in a moment."
 
 
 def render_intake_tools(partners) -> None:
@@ -147,7 +179,7 @@ def main() -> None:
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "model" not in st.session_state:
-        st.session_state.model = "gpt-4o-mini"
+        st.session_state.model = FREE_MODEL
 
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
     st.markdown("""
@@ -169,7 +201,7 @@ def main() -> None:
         st.caption("Safe surplus, less waste.")
         st.divider()
         st.markdown("**Chat settings**")
-        st.session_state.model = st.selectbox("LLM model", ["gpt-4o-mini", "gpt-4.1-mini"], index=0)
+        st.session_state.model = st.selectbox("LLM model", [FREE_MODEL], format_func=lambda _: "OpenRouter Free Models")
         st.markdown("**Safety boundary**")
         st.caption("EcoBite only handles food-rescue logistics. It does not provide legal advice, certify safety, or arrange transport.")
         if st.button("Clear chat"):
@@ -206,8 +238,8 @@ def main() -> None:
                     with st.spinner("Preparing a safe rescue plan..."):
                         try:
                             answer = assistant_reply(prompt, inventory_context)
-                        except Exception:
-                            answer = "I couldn’t reach the LLM service right now. Please confirm the food type, quantity, preparation/expiry time, and storage temperature before donating."
+                        except Exception as error:
+                            answer = friendly_api_error(error)
                 st.markdown(answer)
             st.session_state.messages.append({"role": "assistant", "content": answer})
 
